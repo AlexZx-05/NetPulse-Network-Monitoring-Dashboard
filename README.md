@@ -14,68 +14,77 @@
 ### System design
 
 ```text
-TRUST BOUNDARY A — Clinic device / doctor
- ┌───────────────────────────────────────────────────────────────┐
- │ Doctor app: Scribe draft + authorized patient-context version│
- │ Review / clarify / edit / approve / reject; no auto-finalize   │
- └──────────────────────────────┬────────────────────────────────┘
-                                │ TLS; authenticated actor, clinic,
-                                │ purpose, contract version, request ID
- TRUST BOUNDARY B — BRAHMO service
- ┌──────────────────────────────▼────────────────────────────────┐
- │ API authorization + tenant scope + minimum-data policy         │
- │                  Orchestrator (no clinical decision authority) │
- │       ┌──────────────────────┴─────────────────────┐           │
- │       │                                            │           │
- │       ▼                                            ▼           │
- │ Drug identity graph / dated events       Evidence retrieval    │
- │ exact/reviewed mapping only              lexical + local vector│
- │ FDC ingredient expansion                 scope/applicability    │
- │       │                                  + citation validation │
- │       ▼                                            │           │
- │ Pure deterministic rules                           │           │
- │ no model invocation or network call                │           │
- │       └──────────────────────┬─────────────────────┘           │
- │                              ▼                                 │
- │ Typed findings + 8-state checks + claim/source provenance      │
- │                              │                                 │
- └──────────────────────────────┬────────────────────────────────┘
-                                │ only permitted, minimized evidence payload;
-                                │ otherwise deterministic template/no model
- TRUST BOUNDARY C — Optional external model processor
- ┌──────────────────────────────▼────────────────────────────────┐
- │ Approved provider/model only; no check-path invocation;        │
- │ minimum authorized context; no direct identifiers by default   │
- └──────────────────────────────┬────────────────────────────────┘
-                                │ validated structured text; rejected on
-                                │ unsupported claims/schema/citation failure
- TRUST BOUNDARY D — Approved doctor-facing result
- ┌──────────────────────────────▼────────────────────────────────┐
- │ Doctor inspects citations/checks; resolves ambiguity; approves │
- │ then saves/exports to the clinic record; audit/correction event│
- └───────────────────────────────────────────────────────────────┘
+DOCTOR WORKFLOW — clinic app
+  Scribe draft + authorized patient-context snapshot
+  Doctor reviews, clarifies, edits and approves; never auto-finalize
+                          │
+                          │ authenticated request; TLS; purpose + tenant scope
+                          ▼
+BRAHMO SERVICE — trusted processing boundary
+  API access checks → minimum-data filter → request orchestrator
+                          │
+             ┌────────────┴────────────┐
+             │                         │
+             ▼                         ▼
+  MEDICATION REVIEW              CLINICAL REFERENCE
+  exact/reviewed identity        rights-cleared source search
+  → verified FDC ingredients     lexical + local vector retrieval
+  → deterministic rules          → scope/evidence/citation checks
+  (never sent to model)           → approved evidence pack or abstention
+             │                         │
+             │                         ▼
+             │              Optional evidence-only composer
+             │              (reference-answer path only)
+             │                         │
+             │              Validate claims/citations/schema;
+             │              reject or use abstention on failure
+             │                         │
+             └────────────┬────────────┘
+                          ▼
+  Result builder combines separate answer and check results,
+  preserving each check's state and provenance
+                          │
+  Doctor sees result, limits and sources; resolves open items
+  Explicit doctor approval → save/export → append audit event
+                          │
+                          └── correction → authorized review queue
 
- TRUST BOUNDARY E — Content control plane (separate permissions)
- Source + license → immutable source copy/hash → extraction/QC
- → qualified review → tests → signed release/index manifest
- → serve / expire / withdraw / rollback
+CONTENT CONTROL PLANE — separate from patient workflow
+  Source + rights → version/hash → extraction and quality checks
+  → qualified review → tests → signed release → serve/expire/withdraw
+
+BOUNDARIES
+  A. Clinic device ↔ BRAHMO API: authenticated, encrypted, tenant-scoped
+  B. BRAHMO ↔ model provider: optional; minimum approved evidence only
+  C. Tenant data ↔ shared data: strict access checks at every data path
+  D. Untrusted documents/transcripts: content only, never instructions
 ```
 
 **Position mapping and departures:** I retain P01, P02, P04–P09, with implementation details in S2–S5. I change P03: no clinical claim comes from general model memory; use an approved international source only when it is relevant and clearly labeled, otherwise abstain (S2 D7, S4). I would allow a licensed medicine reference to expand the curated set only after its rights and India coverage are checked (S2 D5, S3). The reported A–C “validated” labels are not proof of production readiness; apply the release gates in S7/S8. Nationwide availability is not the same as validated coverage in every specialty, population or language (S6/S8).
 
-The system keeps patient information, clinic rules, approved clinical sources, medicine/regulatory records and any AI provider separate. A clinic’s rules cannot change national medicine or regulatory records. One clinic must not see another clinic’s data. Documents and transcripts are input data, never instructions to the AI.
+This design has three main parts: the doctor app, the BRAHMO service, and a separate content approval process. The service routes a request to medicine checks, clinical evidence search, or both. Each branch returns its own result; the orchestrator does not make clinical decisions. Medication-check data never enters the model path. The optional text model is limited to wording a reference answer from approved evidence; it cannot choose a medicine, run a check or add a clinical claim.
+
+Patient records, clinic rules, shared clinical sources and canonical medicine/regulatory records remain separate. Clinic rules apply only to that clinic and cannot override national medicine identity or legal events. Access control is enforced across APIs, search, caches, background jobs and exports. Transcripts and documents are treated as untrusted content, not instructions.
+
+| Component | Responsibility | Main records / interface |
+|---|---|---|
+| Doctor app | Collect the question or prescription draft; show evidence, check states and limitations; capture doctor edits and explicit approval. | `scribe-prescription/v1`; doctor action/approval event |
+| Secure API and orchestrator | Authenticate the user, derive tenant scope, check purpose and contract version, pass only needed context, route requests and assemble results. | Request ID, actor/tenant/purpose, context version; typed response |
+| Medicine data and rules | Resolve exact/reviewed medicine identities, expand verified combinations and run deterministic checks against versioned rules/events. | Product, brand alias, ingredient, formulation, regulatory event, rule release, check result |
+| Clinical evidence service | Search licensed/authorized clinical content, apply topic/population/date filters, assess evidence sufficiency and bind each claim to a citation. | Source, source version, decision-unit chunk, citation, evidence pack |
+| Audit and review queue | Record relevant versions and doctor actions; route proposed patient/source/product corrections to an authorized reviewer. | Append-only audit event; correction/review item |
+| Content control plane | Acquire permitted content, verify extraction and clinical meaning, test and publish a signed version; withdraw or roll back when needed. | Source-rights record, review decision, release manifest, index version |
 
 ### How a doctor uses it
 
-1. The doctor signs in, selects the patient and consultation, and enters a question or starts from a Scribe prescription draft.
-2. The app sends the doctor and clinic IDs, the reason for the request, and only the patient information needed for that request. It sends a structured prescription, not the whole transcript by default.
-3. Each Scribe medicine entry includes the words captured, any possible brand or medicine code, strength and unit, form, route, frequency, duration, and where it came from. Missing details stay marked as missing. The system does not fill them in.
-4. The patient-context record has a version and shows where each detail came from and when it was recorded. It may contain clinician-entered age, pregnancy or breastfeeding status, allergies, current medicines, and relevant health details. Missing or conflicting details stay visible; the system does not assume they are normal.
-5. The medicine service uses an exact code or a reviewed alias to identify a product. If it cannot be sure, it asks the doctor to check the match. It does not use an uncertain match for a safety check. A verified combination product is split into its ingredients before checks run.
-6. The question service searches only sources that have been approved for use and match the question’s topic, patient group, language and date. It shows citations or says it cannot confirm the answer.
-7. The safety service runs fixed rules on verified medicine ingredients and available patient details. If important details or data are missing, it shows the applicable “unknown” status and explains why.
-8. The doctor sees the result, its limits and its evidence, and can clarify, correct, edit, accept or reject it. Conflicting sources are shown separately; the system does not invent a compromise.
-9. Nothing is prescribed, sent to a patient or finalized automatically. The doctor must confirm before anything is saved or exported. The system records which versions of the data and rules were used and what the doctor did.
+1. The doctor signs in, opens a consultation and asks a reference question or reviews a Scribe prescription draft.
+2. The app sends an authenticated request containing its purpose and only the context needed. The request includes structured prescription fields and references to relevant transcript spans; it does not send the full transcript by default.
+3. The service checks the contract version, user access, clinic scope and required fields. It records the patient-context version and the source of each value. Missing or conflicting details remain explicit.
+4. For a medication review, the service resolves products only from exact identifiers or reviewed aliases. Ambiguous identity is returned for doctor clarification. Verified combination products are expanded into ingredients before deterministic checks.
+5. For a clinical question, retrieval searches only sources approved for the requested operation and applicable to the topic, population, language, jurisdiction and date. The evidence gate validates applicability and claim support separately from search relevance.
+6. The service returns structured findings, citations, limitations and exactly one of the required states for each check. If the optional model composer is enabled, it receives only approved evidence and its response is checked against that evidence. If validation fails, the answer is rejected or replaced with a deterministic abstention.
+7. The doctor sees the result, opens its sources, clarifies missing details, edits or rejects the draft, and explicitly approves any save/export. No action is finalized or sent to a patient automatically.
+8. The system records the versions and actions needed for the approved audit policy. A correction creates a new event and, where appropriate, a review item; it does not silently rewrite clinical or canonical data.
 
 ### Contracts with Scribe and patient context
 
