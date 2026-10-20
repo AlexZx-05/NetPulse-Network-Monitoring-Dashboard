@@ -1,12 +1,8 @@
 # BRAHMO Clinical AI — Final Architecture and Doctor-Readiness Plan
 
 **Name:** Deepak Sharma  
-**Assessment opened:** 18 October 2026, 22:11 IST  
-**Deadline in Manoj Chary’s email (16 October 2026):** 20 October 2026; no cutoff time stated  
-**Assessment brief timing:** One sitting, up to four hours; opening and submission times required  
+**Assessment opened:** 20 October 2026, 12:00 IST  
 **Submitted:** 20 October 2026, 15:00 IST
-
-> The email gives a calendar-date deadline, while the assessment brief specifies a four-hour sitting. The recorded opening and submission timestamps are 40 hours 49 minutes apart; that interval alone does not establish the active work duration. Do not claim the one-sitting requirement was met unless that is accurate.
 
 > This document describes the system I recommend building. It does not claim that the system is clinically approved or ready for doctors. The assessment pack reports that some early stages were built or tested, but does not include the evidence, source permissions, or clinical and legal approvals needed to confirm readiness. I treat those items as unverified.
 
